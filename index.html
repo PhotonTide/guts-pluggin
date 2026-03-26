@@ -513,6 +513,9 @@ function initCtx(){
 
   recordingDest=ctx.createMediaStreamDestination();
   makeupGain.connect(recordingDest);
+  // Metronome goes direct to speakers only — never captured by recording
+  window.metroOut=ctx.createGain(); window.metroOut.gain.value=0.7;
+  window.metroOut.connect(ctx.destination);
 
   layers.forEach(l=>{ if(!l.nodes) l.nodes=buildLayerNodes(l.state); });
   drawVisuals();
@@ -1039,7 +1042,7 @@ function mClick(acc){
   const now=ctx.currentTime,o=ctx.createOscillator(),g=ctx.createGain();
   o.type='sine'; o.frequency.value=acc?1200:800;
   g.gain.setValueAtTime(acc?.6:.35,now); g.gain.exponentialRampToValueAtTime(.0001,now+.06);
-  o.connect(g); g.connect(masterGain||ctx.destination); o.start(now); o.stop(now+.07);
+  o.connect(g); g.connect(window.metroOut||ctx.destination); o.start(now); o.stop(now+.07);
   const d=document.getElementById('beat-dot'); if(d){d.classList.add('flash');setTimeout(()=>d.classList.remove('flash'),80);}
 }
 function mTick(){if(!mOn) return;const now=Date.now()/1000;if(now>=mNext){mClick(mBeat===0);mBeat=(mBeat+1)%mSig;mNext+=60/mBpm;if(mNext<now) mNext=now+60/mBpm;}}

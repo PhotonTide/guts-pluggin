@@ -40,7 +40,7 @@ body{display:flex;justify-content:center;align-items:flex-start;padding:12px;min
 .display{font-family:'Share Tech Mono',monospace;background:var(--display);border:1px solid #0a2a40;border-radius:4px;padding:5px 12px;color:var(--green);font-size:11px;letter-spacing:2px;text-align:center;min-width:170px;box-shadow:inset 0 0 8px rgba(91,232,255,0.05)}
 .model-tag{font-size:9px;letter-spacing:3px;color:var(--text-dimmer);text-transform:uppercase}
 
-/* BODY */
+
 .body{padding:10px;display:flex;flex-direction:column;gap:8px}
 .row{display:flex;gap:8px;flex-wrap:wrap}
 .section{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:10px 12px;flex:1;min-width:170px}
@@ -194,7 +194,11 @@ canvas#spectrum{width:100%;height:44px;border:1px solid var(--border);border-rad
 .rec-btn.recording{animation:rp 1s infinite}
 @keyframes rp{0%,100%{opacity:1}50%{opacity:.55}}
 .rdot{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 5px var(--red)}
-.exp-btn{background:rgba(212,130,58,.1);border:1px solid var(--accent);color:var(--accent);padding:5px 12px;border-radius:4px;cursor:pointer;font-family:'Rajdhani',sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;transition:all .12s}
+.play-btn{background:rgba(91,232,255,.08);border:1px solid var(--green-dim);color:var(--green-dim);padding:5px 12px;border-radius:4px;cursor:pointer;font-family:'Rajdhani',sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;transition:all .12s}
+.play-btn:hover{background:rgba(91,232,255,.15);border-color:var(--green);color:var(--green)}
+.play-btn:disabled{opacity:.3;cursor:default;pointer-events:none}
+.play-btn.playing{background:rgba(91,232,255,.15);border-color:var(--green);color:var(--green);animation:rp 1.2s infinite}
+color:var(--accent);padding:5px 12px;border-radius:4px;cursor:pointer;font-family:'Rajdhani',sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;transition:all .12s}
 .exp-btn:hover{background:rgba(212,130,58,.2)}
 .exp-btn:disabled{opacity:.35;cursor:default;pointer-events:none}
 .rec-time{font-family:'Share Tech Mono',monospace;color:var(--green);font-size:12px;min-width:46px}
@@ -466,6 +470,7 @@ canvas#spectrum{width:100%;height:44px;border:1px solid var(--border);border-rad
       </div>
       <div class="rec-ctrl">
         <button class="rec-btn" id="rec-btn"><div class="rdot"></div>REC</button>
+        <button class="play-btn" id="play-btn" disabled>▶ PLAY</button>
         <button class="exp-btn" id="exp-btn" disabled>EXPORT</button>
         <span class="rec-time" id="rec-time">0:00</span>
       </div>
@@ -1103,12 +1108,18 @@ document.getElementById('fmt-mp3').addEventListener('click',()=>{
 function startRec(){
   if(!ctx) initCtx(); if(ctx.state==='suspended') ctx.resume();
   recordedChunks=[]; recBlob=null;
+  // stop any active playback
+  if(playbackAudio){playbackAudio.pause();playbackAudio=null;}
+  document.getElementById('play-btn').disabled=true;
+  document.getElementById('play-btn').textContent='▶ PLAY';
+  document.getElementById('play-btn').classList.remove('playing');
   document.getElementById('exp-status').textContent='';
   mediaRecorder=new MediaRecorder(recordingDest.stream,{mimeType:'audio/webm'});
   mediaRecorder.ondataavailable=e=>recordedChunks.push(e.data);
   mediaRecorder.onstop=()=>{
     recBlob=new Blob(recordedChunks,{type:'audio/webm'});
-    updateDisp('DONE — EXPORT TO SAVE');
+    document.getElementById('play-btn').disabled=false;
+    updateDisp('DONE — PLAY OR EXPORT');
   };
   mediaRecorder.start(); isRecording=true; recStart=Date.now();
   const btn=document.getElementById('rec-btn');
@@ -1222,6 +1233,38 @@ async function exportAudio(){
     btn.disabled=false; btn.textContent='EXPORT';
   }
 }
+
+// ── PLAYBACK ─────────────────────────────
+let playbackAudio=null;
+
+function playRecording(){
+  if(!recBlob) return;
+  const btn=document.getElementById('play-btn');
+  // If already playing, stop it
+  if(playbackAudio){
+    playbackAudio.pause();
+    playbackAudio.currentTime=0;
+    playbackAudio=null;
+    btn.classList.remove('playing');
+    btn.textContent='▶ PLAY';
+    updateDisp('READY');
+    return;
+  }
+  const url=URL.createObjectURL(recBlob);
+  playbackAudio=new Audio(url);
+  playbackAudio.play();
+  btn.classList.add('playing');
+  btn.textContent='■ STOP';
+  updateDisp('▶ PLAYING');
+  playbackAudio.onended=()=>{
+    URL.revokeObjectURL(url);
+    playbackAudio=null;
+    btn.classList.remove('playing');
+    btn.textContent='▶ PLAY';
+    updateDisp('READY');
+  };
+}
+document.getElementById('play-btn').addEventListener('click',playRecording);
 
 document.getElementById('rec-btn').addEventListener('click',()=>isRecording?stopRec():startRec());
 document.getElementById('exp-btn').addEventListener('click',exportAudio);

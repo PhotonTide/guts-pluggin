@@ -198,6 +198,10 @@ canvas#spectrum{width:100%;height:44px;border:1px solid var(--border);border-rad
 .play-btn:hover{background:rgba(91,232,255,.15);border-color:var(--green);color:var(--green)}
 .play-btn:disabled{opacity:.3;cursor:default;pointer-events:none}
 .play-btn.playing{background:rgba(91,232,255,.15);border-color:var(--green);color:var(--green);animation:rp 1.2s infinite}
+.layer-play-btn{background:none;border:1px solid var(--border2);color:var(--text-dimmer);width:22px;height:22px;border-radius:3px;cursor:pointer;font-size:10px;display:flex;align-items:center;justify-content:center;transition:all .12s;flex-shrink:0;padding:0}
+.layer-play-btn:hover{border-color:var(--green-dim);color:var(--green-dim)}
+.layer-play-btn:disabled{opacity:.25;cursor:default;pointer-events:none}
+.layer-play-btn.lplaying{border-color:var(--green);color:var(--green);animation:rp 1.2s infinite}
 color:var(--accent);padding:5px 12px;border-radius:4px;cursor:pointer;font-family:'Rajdhani',sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;transition:all .12s}
 .exp-btn:hover{background:rgba(212,130,58,.2)}
 .exp-btn:disabled{opacity:.35;cursor:default;pointer-events:none}
@@ -581,6 +585,8 @@ function buildLayerNodes(s){
   n.reverbMix.connect(n.layerGain);
   n.layerGain.connect(n.vuAnalyser);
   n.layerGain.connect(masterGain);
+  // per-layer recording tap (created lazily when recording starts)
+  n.recDest=null;
 
   syncNodesToState(n,s); buildDistCurve(n,s.distAmt);
   return n;
@@ -653,6 +659,7 @@ function renderLayers(){
         <input type="range" class="layer-vol" min="0" max="1" step="0.01" value="${l.volume}">
         <span class="lvol-pct" id="lv${i}">${Math.round(l.volume*100)}%</span>
         <button class="mute-btn${l.muted?' muted':''}">${l.muted?'MUTED':'MUTE'}</button>
+        <button class="layer-play-btn" id="lplay-${i}" ${l.blob?'':'disabled'} title="Play this layer solo">▶</button>
       </div>
       <div class="layer-preset-badge">${l.state.preset||'CUSTOM'}</div>`;
     card.querySelector('.layer-vol').addEventListener('input',e=>{
@@ -664,9 +671,12 @@ function renderLayers(){
       e.stopPropagation(); l.muted=!l.muted;
       e.target.classList.toggle('muted',l.muted); e.target.textContent=l.muted?'MUTED':'MUTE';
     });
+    card.querySelector('.layer-play-btn').addEventListener('click',e=>{
+      e.stopPropagation(); playLayerSolo(i);
+    });
     if(layers.length>1) card.querySelector('.layer-del').addEventListener('click',e=>{e.stopPropagation();removeLayer(i);});
     card.addEventListener('click',e=>{
-      if(e.target.classList.contains('layer-del')||e.target.classList.contains('mute-btn')||e.target.tagName==='INPUT') return;
+      if(e.target.classList.contains('layer-del')||e.target.classList.contains('mute-btn')||e.target.classList.contains('layer-play-btn')||e.target.tagName==='INPUT') return;
       selectLayer(i);
     });
     list.appendChild(card);
@@ -1105,23 +1115,50 @@ document.getElementById('fmt-mp3').addEventListener('click',()=>{
   document.getElementById('fmt-wav').classList.remove('on');
 });
 
+// per-layer recorder state
+const layerRecorders=[]; // MediaRecorder per layer
+const layerChunks=[];    // recorded chunks per layer
+
 function startRec(){
   if(!ctx) initCtx(); if(ctx.state==='suspended') ctx.resume();
   recordedChunks=[]; recBlob=null;
+  // clear previous layer blobs
+  layers.forEach(l=>{ l.blob=null; });
+  layerRecorders.length=0; layerChunks.length=0;
   // stop any active playback
   if(playbackAudio){playbackAudio.pause();playbackAudio=null;}
+  stopAllLayerSolos();
   document.getElementById('play-btn').disabled=true;
   document.getElementById('play-btn').textContent='▶ PLAY';
   document.getElementById('play-btn').classList.remove('playing');
   document.getElementById('exp-status').textContent='';
+
+  // Master mix recorder
   mediaRecorder=new MediaRecorder(recordingDest.stream,{mimeType:'audio/webm'});
   mediaRecorder.ondataavailable=e=>recordedChunks.push(e.data);
   mediaRecorder.onstop=()=>{
     recBlob=new Blob(recordedChunks,{type:'audio/webm'});
     document.getElementById('play-btn').disabled=false;
+    renderLayers(); // refresh layer play buttons
     updateDisp('DONE — PLAY OR EXPORT');
   };
-  mediaRecorder.start(); isRecording=true; recStart=Date.now();
+  mediaRecorder.start();
+
+  // Per-layer recorders — tap each layer's layerGain
+  layers.forEach((l,i)=>{
+    layerChunks[i]=[];
+    if(!l.nodes) return;
+    // create/recreate recDest for this layer
+    l.nodes.recDest=ctx.createMediaStreamDestination();
+    l.nodes.layerGain.connect(l.nodes.recDest);
+    const lr=new MediaRecorder(l.nodes.recDest.stream,{mimeType:'audio/webm'});
+    lr.ondataavailable=e=>{ if(layerChunks[i]) layerChunks[i].push(e.data); };
+    lr.onstop=()=>{ l.blob=new Blob(layerChunks[i],{type:'audio/webm'}); };
+    lr.start();
+    layerRecorders[i]=lr;
+  });
+
+  isRecording=true; recStart=Date.now();
   const btn=document.getElementById('rec-btn');
   btn.classList.add('recording'); btn.innerHTML='<div class="rdot"></div>STOP';
   document.getElementById('exp-btn').disabled=true; updateDisp('● REC');
@@ -1130,10 +1167,42 @@ function startRec(){
     document.getElementById('rec-time').textContent=m+':'+(s<10?'0':'')+s;
   },1000);
 }
+
 function stopRec(){
   if(!mediaRecorder) return; mediaRecorder.stop(); isRecording=false;
+  // stop all layer recorders
+  layerRecorders.forEach(lr=>{ try{ lr.stop(); }catch(e){} });
   const btn=document.getElementById('rec-btn'); btn.classList.remove('recording'); btn.innerHTML='<div class="rdot"></div>REC';
   clearInterval(recIntv); document.getElementById('exp-btn').disabled=false;
+}
+
+// ── LAYER SOLO PLAYBACK ───────────────────
+const layerSoloAudio={}; // active Audio objects per layer index
+
+function playLayerSolo(i){
+  const l=layers[i]; if(!l||!l.blob) return;
+  const btn=document.getElementById(`lplay-${i}`);
+  // stop if already playing this layer
+  if(layerSoloAudio[i]){
+    layerSoloAudio[i].pause(); layerSoloAudio[i]=null;
+    btn.textContent='▶'; btn.classList.remove('lplaying'); return;
+  }
+  const url=URL.createObjectURL(l.blob);
+  const aud=new Audio(url); layerSoloAudio[i]=aud;
+  btn.textContent='■'; btn.classList.add('lplaying');
+  aud.play();
+  aud.onended=()=>{
+    URL.revokeObjectURL(url); layerSoloAudio[i]=null;
+    if(btn){ btn.textContent='▶'; btn.classList.remove('lplaying'); }
+  };
+}
+
+function stopAllLayerSolos(){
+  Object.entries(layerSoloAudio).forEach(([i,a])=>{
+    if(a){a.pause(); layerSoloAudio[i]=null;}
+    const btn=document.getElementById(`lplay-${i}`);
+    if(btn){btn.textContent='▶';btn.classList.remove('lplaying');}
+  });
 }
 
 // ── WAV encoder ──────────────────────────
